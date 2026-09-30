@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#07050f">
+<meta name="description" content="ドラッグで囲んで合計10！脳汁ドバドバのエクストリーム数字パズル">
+<title>TEN RUSH EXTREME</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2307050f'/%3E%3Ctext x='32' y='46' font-size='38' font-weight='900' font-family='Arial Black,sans-serif' text-anchor='middle' fill='%23ffe62e'%3E10%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="bg"></div>
+<div id="vignette"></div>
+
+<div id="app">
+  <div id="stage">
+    <header id="hud">
+      <div class="row top">
+        <div class="stat score"><span class="lbl">SCORE</span><b id="score">0</b></div>
+        <div class="stat time"><span class="lbl">TIME</span><b id="time">45.0</b></div>
+        <button id="btnPause" class="icon-btn" type="button" aria-label="一時停止">❚❚</button>
+      </div>
+      <div class="bar timebar"><i id="timeFill"></i></div>
+      <div class="row mid">
+        <div class="combo"><span class="lbl">COMBO</span><b id="comboNum">0</b><em id="comboMult">×1.0</em></div>
+        <div class="bar combobar"><i id="comboFill"></i></div>
+        <div class="wave"><span id="waveLbl">WAVE 1</span><small id="drainLbl">DRAIN ×1.0</small></div>
+      </div>
+      <div class="bar feverbar"><i id="feverFill"></i><span id="feverLbl">FEVER GAUGE</span></div>
+    </header>
+
+    <main id="boardWrap">
+      <div id="board" aria-label="数字盤面">
+        <div id="selRect"></div>
+        <div id="selBadge"></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<canvas id="fx"></canvas>
+<div id="flash"></div>
+<div id="floaters"></div>
+<div id="announce" aria-live="polite"></div>
+<div id="toast"></div>
+
+<!-- ===== TITLE ===== -->
+<section id="title" class="overlay">
+  <div class="panel">
+    <h1 class="logo">
+      <span class="l1">TEN</span>
+      <span class="l2">RUSH</span>
+      <span class="l3">EXTREME</span>
+    </h1>
+    <p class="tag">脳汁ドバドバ ─ 10メイク数字パズル</p>
+
+    <div class="card howto">
+      <div class="mini" aria-hidden="true">
+        <div class="mg">
+          <i>2</i><i class="e"></i>
+          <i class="e"></i><i class="e"></i>
+          <i class="e"></i><i>8</i>
+          <div class="mframe"></div>
+        </div>
+        <div class="meq">= 10 !</div>
+      </div>
+      <ul>
+        <li>ドラッグで<b>四角く囲んで</b>、中の数字の合計が<b class="c-yel">10</b>なら消える！<br>縦・横・範囲ぜんぶOK。空きマスを含めて囲むのもOK。</li>
+        <li>囲んだ中が<b class="c-cyan">同じ数字だけ</b>（2個以上）でも消える <b>TWIN</b></li>
+        <li>テンポよく消して<b class="c-mag">COMBO</b>倍率UP。ゲージ満タンで<b class="c-yel">FEVER</b>！</li>
+        <li><b class="c-gold">★金マス</b>は +2秒＆スコア2倍。ただし<b class="c-red">ミスは時間ペナルティ</b>。</li>
+      </ul>
+    </div>
+
+    <div class="diffs" id="diffs" role="radiogroup" aria-label="難易度">
+      <button class="chip" type="button" role="radio" data-diff="rush">RUSH<small>60秒 / 入門</small></button>
+      <button class="chip" type="button" role="radio" data-diff="extreme">EXTREME<small>45秒 / 本命</small></button>
+      <button class="chip" type="button" role="radio" data-diff="inferno">INFERNO<small>30秒 / 狂気</small></button>
+    </div>
+
+    <button id="btnStart" class="btn primary" type="button">START</button>
+    <div class="best">BEST <b id="tBest">0</b></div>
+
+    <div class="toggles">
+      <button id="tgSound" class="pill" type="button"></button>
+      <button id="tgFx" class="pill" type="button"></button>
+      <button id="tgAssist" class="pill" type="button"></button>
+    </div>
+    <p class="warn">※ 強い光の点滅・画面の揺れを含みます。苦手な方は EFFECTS を LITE にしてください。</p>
+  </div>
+</section>
+
+<!-- ===== PAUSE ===== -->
+<section id="pause" class="overlay hidden">
+  <div class="panel center">
+    <h2 class="big">PAUSED</h2>
+    <button id="btnResume" class="btn primary" type="button">RESUME</button>
+    <button id="btnQuit" class="btn ghost" type="button">タイトルへ</button>
+  </div>
+</section>
+
+<!-- ===== RESULT ===== -->
+<section id="result" class="overlay hidden">
+  <div class="panel center">
+    <h2 class="big" id="rTitle">TIME UP</h2>
+    <div class="rank" id="rRank">S</div>
+    <div class="rscore" id="rScore">0</div>
+    <div class="newrec hidden" id="rNew">★ NEW RECORD ★</div>
+    <div class="rbest">BEST <b id="rBest">0</b> <span id="rDiff"></span></div>
+    <div class="stats">
+      <div><span>MAX COMBO</span><b id="sCombo">0</b></div>
+      <div><span>WAVE</span><b id="sWave">1</b></div>
+      <div><span>CLEARS</span><b id="sClears">0</b></div>
+      <div><span>CELLS</span><b id="sCells">0</b></div>
+      <div><span>FEVER</span><b id="sFever">0</b></div>
+      <div><span>MISS</span><b id="sMiss">0</b></div>
+    </div>
+    <button id="btnRetry" class="btn primary" type="button">RETRY</button>
+    <div class="row2">
+      <button id="btnShare" class="btn ghost" type="button">結果をシェア</button>
+      <button id="btnTitle" class="btn ghost" type="button">タイトルへ</button>
+    </div>
+  </div>
+</section>
+
+<script src="audio.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
