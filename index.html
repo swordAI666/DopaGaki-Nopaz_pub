@@ -18,7 +18,7 @@
     <header id="hud">
       <div class="row top">
         <div class="stat score"><span class="lbl">SCORE</span><b id="score">0</b></div>
-        <div class="stat time"><span class="lbl">TIME</span><b id="time">45.0</b></div>
+        <div class="stat time"><span class="lbl" id="timeLbl">TIME</span><b id="time">45.0</b></div>
         <button id="btnPause" class="icon-btn" type="button" aria-label="一時停止">❚❚</button>
       </div>
       <div class="bar timebar"><i id="timeFill"></i></div>
@@ -43,6 +43,7 @@
 <div id="flash"></div>
 <div id="floaters"></div>
 <div id="announce" aria-live="polite"></div>
+<div id="jackpot" aria-hidden="true"><div class="jp-head">★ JACKPOT ★</div><div class="jp-reel" id="jpReel">…</div></div>
 <div id="toast"></div>
 
 <!-- ===== TITLE ===== -->
@@ -70,6 +71,7 @@
         <li>囲んだ中が<b class="c-cyan">同じ数字だけ</b>（2個以上）でも消える <b>TWIN</b></li>
         <li>テンポよく消して<b class="c-mag">COMBO</b>倍率UP。ゲージ満タンで<b class="c-yel">FEVER</b>！</li>
         <li><b class="c-gold">★金マス</b>は +2秒＆スコア2倍。ただし<b class="c-red">ミスは時間ペナルティ</b>。</li>
+        <li>いつ来るか分からない<b class="c-gold">JACKPOT</b>に注目。時間が尽きても最後の6秒は<b class="c-red">LAST SPURT（得点×3）</b>！</li>
       </ul>
     </div>
 
@@ -112,7 +114,7 @@
       <div><span>MAX COMBO</span><b id="sCombo">0</b></div>
       <div><span>WAVE</span><b id="sWave">1</b></div>
       <div><span>CLEARS</span><b id="sClears">0</b></div>
-      <div><span>CELLS</span><b id="sCells">0</b></div>
+      <div><span>JACKPOT</span><b id="sJack">0</b></div>
       <div><span>FEVER</span><b id="sFever">0</b></div>
       <div><span>MISS</span><b id="sMiss">0</b></div>
     </div>

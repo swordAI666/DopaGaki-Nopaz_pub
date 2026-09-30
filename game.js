@@ -23,7 +23,16 @@
     inferno: { label: 'INFERNO', time: 30, win: 1.9, growth: 0.25, penalty: 3.0, tb: 0.8, mult: 2.5 },
   };
   const HUE = { 1: 190, 2: 140, 3: 52, 4: 22, 5: 320, 6: 22, 7: 52, 8: 140, 9: 190 };
-  const FEVER_DUR = 8;          // seconds
+  const FEVER_DUR = 8;          // seconds of full fever
+  const FEVER_CHARGE = 0.9;     // build-up before the drop (fever is already active, music ducked)
+  const SPURT_DUR = 6, SPURT_MAX = 9;   // LAST SPURT: final x3 burst when time runs out
+  const JP = [                  // JACKPOT outcomes (w = weight)
+    { id: 'purge', w: 35, name: 'DIGIT PURGE', color: '#19e3ff' },
+    { id: 'burst', w: 20, name: 'SCORE BURST', color: '#ffe62e' },
+    { id: 'time',  w: 20, name: 'TIME BANK',   color: '#9dff3a' },
+    { id: 'gold',  w: 15, name: 'GOLD SHOWER', color: '#ffc400' },
+    { id: 'fever', w: 10, name: 'FEVER',       color: '#ff2bd6' },
+  ];
   const GOLD_P = 0.035;         // chance that a new cell is gold
   const HINT_DELAY = 3.4;       // seconds of idle before a hint glows
   const PAD = 6, BORDER = 2, GAP = 3;   // keep in sync with style.css
@@ -53,6 +62,7 @@
   const feverBar = document.querySelector('.feverbar'), feverFill = $('#feverFill'), feverLbl = $('#feverLbl');
   const flashEl = $('#flash'), floatLayer = $('#floaters'), annEl = $('#announce'), toastEl = $('#toast');
   const titleEl = $('#title'), pauseEl = $('#pause'), resultEl = $('#result');
+  const jpEl = $('#jackpot'), jpReel = $('#jpReel'), timeLbl = $('#timeLbl');
   const root = document.documentElement;
 
   const show = (el) => el.classList.remove('hidden');
@@ -66,6 +76,8 @@
   let vals, golds, cellEls = [];
   let time, cap, score, shown, combo, comboT, comboWin, fever, feverT, wave;
   let idleT, hintOn, refillT, cdT, cdStep, lastSec, dangerOn, heat, musicT;
+  let spurtT = 0, spurtUsed = false, hitStopT = 0, feverDropPending = false, feverAt = null;
+  let jp = null, jpHideT = 0, jpSince = 0, lastPts = 0;
   let stats;
   let drag = null, selKey = '', selIdx = [], selOk = false;
 
@@ -212,7 +224,8 @@
   }
   function cellAt(px, py) {
     const br = boardEl.getBoundingClientRect(), step = cell + GAP;
-    const x = px - br.left - BORDER - PAD, y = py - br.top - BORDER - PAD;
+    const k = br.width / boardEl.offsetWidth || 1;   // undo a transient zoom punch (scale about centre)
+    const x = (px - br.left) / k - BORDER - PAD, y = (py - br.top) / k - BORDER - PAD;
     return { r: clamp(Math.floor(y / step), 0, R - 1), c: clamp(Math.floor(x / step), 0, C - 1) };
   }
 
@@ -299,6 +312,21 @@
     flashEl.style.background = color;
     flashEl.animate([{ opacity: alpha }, { opacity: 0 }], { duration: dur, easing: 'ease-out' });
   }
+  // freeze simulation + particles for a few frames on big moments
+  function hitStop(sec) { hitStopT = Math.max(hitStopT, lite() ? sec * 0.5 : sec); }
+  // board zoom punch (cellAt compensates, so dragging stays accurate)
+  function punch(amount, dur = 240) {
+    if (lite()) amount *= 0.4;
+    boardEl.animate([{ transform: `scale(${1 + amount})` }, { transform: 'scale(1)' }], { duration: dur, easing: 'cubic-bezier(.2,.9,.3,1)' });
+  }
+  // red/cyan channel split on the whole stage
+  function rgbSplit(px = 6, dur = 320) {
+    if (lite()) return;
+    stage.animate([
+      { filter: `drop-shadow(${px}px 0 0 rgba(255,0,90,.75)) drop-shadow(${-px}px 0 0 rgba(0,220,255,.75))` },
+      { filter: 'none' },
+    ], { duration: dur, easing: 'ease-out' });
+  }
   function vib(p) { if (lite()) return; try { navigator.vibrate && navigator.vibrate(p); } catch (e) { /* unsupported */ } }
 
   function floater(text, x, y, cls, size) {
@@ -315,6 +343,9 @@
     annEl.textContent = text;
     annEl.style.setProperty('--c', color);
     annEl.style.fontSize = `calc(var(--ann) * ${size})`;
+    // long strings ("ADRENALINE OVERLOAD") must never spill off a phone screen
+    const maxW = innerWidth * 0.86, w = annEl.offsetWidth;
+    if (w > maxW) annEl.style.fontSize = `calc(var(--ann) * ${(size * maxW / w).toFixed(3)})`;
     if (annAnim) annAnim.cancel();
     annAnim = annEl.animate([
       { opacity: 0, transform: 'translate(-50%,-50%) scale(2.6) rotate(-8deg)' },
@@ -443,12 +474,12 @@
     comboWin = comboWindow(); comboT = comboWin;
     const mult = multOf(combo);
     const base = 50 * n * n * (type === 'twin' ? 0.6 : 1);
-    const pts = Math.round(base * (g ? 2 : 1) * mult * (inFever ? 2 : 1) * diff.mult);
-    score += pts;
+    const pts = Math.round(base * (g ? 2 : 1) * mult * bonusMult() * diff.mult);
+    score += pts; lastPts = pts;
     stats.clears++; stats.cells += n;
 
     const tb = (Math.min(3, 0.5 * n) * (type === 'twin' ? 0.5 : 1)) * diff.tb + 2 * g;
-    if (!inFever) time = Math.min(cap, time + tb);
+    if (!inFever) addTime(tb);
     if (!inFever) fever = Math.min(100, fever + n * 1.3 + Math.min(combo, 12) * 0.35 + g * 8);
 
     /* board update + per-cell effects */
@@ -482,23 +513,26 @@
     if (g) announce('GOLD RUSH!', { color: '#ffc400', size: 0.95, dur: 800 });
 
     shake(Math.min(16, 2 + n * 1.2 + combo * 0.3 + (inFever ? 3 : 0)), 280);
+    if (n >= 8) hitStop(0.09); else if (n >= 5) hitStop(0.06);
+    if (tier) hitStop(0.07);
+    if (n >= 4 || tier || g) punch(Math.min(0.05, 0.012 + n * 0.004 + (tier ? 0.015 : 0)), 230);
     A.sfx.clear(combo, n, type);
     vib(Math.min(40, 8 + n * 3));
     popCombo();
 
     if (!inFever && fever >= 100) startFever(ctr);
 
-    /* refill check */
-    if (refillT <= 0) {
-      const left = countLeft();
-      if (left <= Math.max(6, Math.floor(R * C * 0.12)) || !hasMove()) refillT = 0.45;
-    }
+    /* variable-ratio reward: the longer since the last one, the likelier */
+    jpSince++;
+    if (!jp && !feverDropPending && Math.random() < jackpotChance()) startJackpot();
+
+    checkRefill();
   }
 
   function doMiss(rc) {
     stats.misses++;
     const o = boardOrigin(), ctr = rectCenter(rc, o);
-    if (feverT > 0) {          // fever is forgiving: no penalty
+    if (feverT > 0 || spurtT > 0) {          // fever / last spurt are forgiving: no penalty
       floater('MISS', ctr.x, ctr.y, 'miss', 22);
       A.sfx.miss(); shake(5, 200);
       return;
@@ -513,7 +547,7 @@
     A.sfx.miss(); vib([30, 40, 30]);
     if (had >= 5) announce('COMBO LOST', { color: '#ff3355', size: 0.55, dur: 700 });
     idleT = 0;
-    if (time <= 0) { time = 0; gameOver(); }
+    if (time <= 0) timeUp();
   }
 
   function breakCombo() {
@@ -521,23 +555,161 @@
     combo = 0; comboT = 0;
   }
 
+  /* ---- bonus helpers ---- */
+  const bonusMult = () => (feverT > 0 ? 2 : 1) * (spurtT > 0 ? 3 : 1);
+  // once the LAST SPURT has started, time is worth a quarter (extends the spurt a little)
+  function addTime(sec) {
+    if (spurtT > 0) { const b = spurtT; spurtT = Math.min(SPURT_MAX, spurtT + sec * 0.25); return spurtT - b; }
+    const b = time; time = Math.min(cap, time + sec); return time - b;
+  }
+  function checkRefill() {
+    if (refillT > 0) return;
+    if (countLeft() <= Math.max(6, Math.floor(R * C * 0.12)) || !hasMove()) refillT = 0.45;
+  }
+  function wipeCells(idxs, o, burstN = 8) {
+    for (const i of idxs) cellEls[i].classList.remove('boom', 'spawn', 'hint');
+    void boardEl.offsetWidth;
+    for (const i of idxs) {
+      const p = cellCenter(i, o);
+      fx.burst(p.x, p.y, golds[i] ? 48 : HUE[vals[i]], burstN, 320, 8);
+      vals[i] = 0; golds[i] = 0; paint(i);
+      cellEls[i].classList.add('boom');
+    }
+  }
+
+  /* ---- FEVER: charge (ducked music, riser) -> drop (boom, flash, confetti) ---- */
   function startFever(at) {
-    feverT = FEVER_DUR; fever = 100;
-    document.body.classList.add('fever');
-    announce('FEVER!!', { color: '#ffe62e', size: 1.25, dur: 1300 });
-    flash('#ffffff', 0.7, 450);
-    shake(18, 500);
-    fx.confetti(at.x, at.y, 70);
-    fx.ring(at.x, at.y, 50, 140, 8);
-    A.sfx.feverStart(); vib([40, 30, 80]);
+    if (feverT > 0) { feverT += 4; return; }          // already burning: extend
+    feverT = FEVER_DUR + FEVER_CHARGE; fever = 100;
+    feverDropPending = true; feverAt = at;
+    document.body.classList.add('charging');
+    A.music.duck(true); A.sfx.feverCharge(FEVER_CHARGE);
+    vib([15, 30, 15, 30, 15]);
     stats.fevers++;
   }
+  function dropFever() {
+    feverDropPending = false;
+    document.body.classList.remove('charging');
+    document.body.classList.add('fever');
+    A.music.duck(false); A.sfx.feverDrop();
+    announce('FEVER!!', { color: '#ffe62e', size: 1.3, dur: 1300 });
+    flash('#ffffff', 0.8, 450);
+    shake(18, 500); hitStop(0.14); punch(0.07, 320); rgbSplit(8, 420);
+    const at = feverAt || { x: innerWidth / 2, y: innerHeight * 0.45 };
+    fx.confetti(at.x, at.y, 70);
+    fx.ring(at.x, at.y, 50, 140, 8);
+    vib([40, 30, 80]);
+  }
   function endFever() {
-    feverT = 0; fever = 0;
-    document.body.classList.remove('fever');
+    feverT = 0; fever = 0; feverDropPending = false;
+    document.body.classList.remove('fever', 'charging');
+    A.music.duck(false);
     comboT = comboWin = comboWindow();
     announce('FEVER END', { color: '#19e3ff', size: 0.5, dur: 700 });
     A.sfx.feverEnd();
+  }
+
+  /* ---- LAST SPURT: time is up -> one final burst with score x3, then the run ends ---- */
+  function timeUp() {
+    time = 0;
+    if (spurtUsed) gameOver(); else startSpurt();
+  }
+  function startSpurt() {
+    spurtUsed = true; spurtT = SPURT_DUR;
+    document.body.classList.add('spurt');
+    comboT = comboWin = comboWindow();
+    const cx = innerWidth / 2, cy = innerHeight * 0.45;
+    announce('LAST SPURT!!', { color: '#ff3355', size: 1.3, dur: 1500 });
+    floater('SCORE ×3', cx, cy + 58, 'score', 28);
+    flash('#ff3355', 0.6, 420); shake(16, 420); hitStop(0.12); punch(0.05, 300); rgbSplit(7, 360);
+    fx.ring(cx, cy, 350, 160, 8);
+    A.sfx.spurtStart(); vib([60, 40, 100]);
+  }
+
+  /* ---- JACKPOT: surprise reward with a short reel ---- */
+  function jackpotChance() { return Math.min(0.6, (0.01 + 0.004 * jpSince) * (feverT > 0 ? 1.5 : 1)); }
+  function pickJackpot(force) {
+    if (force) return JP.find((j) => j.id === force) || JP[0];
+    let r = Math.random() * JP.reduce((a, j) => a + j.w, 0);
+    for (const j of JP) { r -= j.w; if (r < 0) return j; }
+    return JP[0];
+  }
+  function startJackpot(force) {
+    jpSince = 0; stats.jackpots++;
+    jp = { t: 0, dur: 0.95, res: pickJackpot(force), k: -1 };
+    jpHideT = 0;
+    jpReel.classList.remove('win'); jpReel.textContent = '…'; jpReel.style.borderColor = '';
+    jpEl.classList.add('on');
+    hitStop(0.06);
+    A.sfx.jackpotStart(); vib([20, 30, 20]);
+  }
+  function updateJackpot(dt) {
+    jp.t += dt;
+    const STEPS = 14, N = JP.length;
+    const k = Math.min(STEPS, Math.floor(Math.pow(jp.t / jp.dur, 0.6) * (STEPS + 1)));
+    if (k !== jp.k) {       // reel decelerates and lands on the result at k = STEPS
+      jp.k = k;
+      const item = JP[(((JP.indexOf(jp.res) - (STEPS - k)) % N) + N) % N];
+      jpReel.textContent = item.name; jpReel.style.borderColor = item.color;
+      A.sfx.jackpotTick(k);
+    }
+    if (jp.t >= jp.dur) finishJackpot();
+  }
+  function finishJackpot() {
+    const res = jp.res;
+    jp = null;
+    jpReel.textContent = res.name; jpReel.style.borderColor = res.color; jpReel.classList.add('win');
+    jpHideT = 1.1;
+    const cx = innerWidth / 2, cy = innerHeight * 0.45;
+    flash('#ffe62e', 0.7, 420); shake(15, 420); hitStop(0.12); punch(0.06, 300); rgbSplit(6, 360);
+    fx.confetti(cx, cy, 80); fx.ring(cx, cy, 50, 170, 8);
+    A.sfx.jackpotWin(); vib([30, 30, 30, 30, 90]);
+    applyJackpot(res);
+  }
+  function applyJackpot(res) {
+    const o = boardOrigin(), cx = innerWidth / 2, cy = innerHeight * 0.45;
+    const bm = bonusMult(), mult = Math.max(1.5, multOf(combo));
+    let id = res.id;
+    if (id === 'purge') {             // wipe the most common digit off the board
+      const cnt = new Array(10).fill(0);
+      for (let i = 0; i < vals.length; i++) if (vals[i]) cnt[vals[i]]++;
+      let best = 0, digit = 0;
+      for (let d = 1; d <= 9; d++) if (cnt[d] > best || (cnt[d] === best && best > 0 && Math.random() < 0.5)) { best = cnt[d]; digit = d; }
+      if (!best) id = 'burst';
+      else {
+        const idxs = [];
+        for (let i = 0; i < vals.length; i++) if (vals[i] === digit) idxs.push(i);
+        wipeCells(idxs, o, 10);
+        stats.cells += idxs.length;
+        const pts = Math.round(300 * idxs.length * mult * bm * diff.mult);
+        score += pts; lastPts = pts;
+        floater(`ALL ${digit}s  +${fmt(pts)}`, cx, cy + 62, 'gold', 26);
+        checkRefill();
+      }
+    }
+    if (id === 'burst') {
+      const pts = Math.round(10000 * mult * bm * diff.mult);
+      score += pts; lastPts = pts;
+      floater('+' + fmt(pts), cx, cy + 62, 'gold', 36);
+    } else if (id === 'time') {
+      const d = addTime(8);
+      floater('+' + d.toFixed(1) + 's', cx, cy + 62, 'time', 32);
+    } else if (id === 'gold') {
+      const pool = [];
+      for (let i = 0; i < vals.length; i++) if (vals[i] && !golds[i]) pool.push(i);
+      const n = Math.min(14, pool.length);
+      for (let k = 0; k < n; k++) {
+        const j = k + Math.floor(Math.random() * (pool.length - k));
+        [pool[k], pool[j]] = [pool[j], pool[k]];
+        const i = pool[k];
+        golds[i] = 1; paint(i);
+        const p = cellCenter(i, o);
+        fx.burst(p.x, p.y, 48, 8, 240, 7);
+      }
+      floater('★ GOLD ×' + n, cx, cy + 62, 'gold', 30);
+    } else if (id === 'fever') {
+      startFever({ x: cx, y: cy });
+    }
   }
 
   function doRefill() {
@@ -548,11 +720,11 @@
       wave++;
       const bonus = Math.round(3000 * wave * diff.mult);
       score += bonus;
-      time = Math.min(cap, time + 5);
+      const addedT = addTime(5);
       announce('WAVE ' + wave, { color: '#19e3ff', size: 1.15, dur: 1250 });
       const cx = innerWidth / 2, cy = innerHeight * 0.45;
       floater('WAVE CLEAR +' + fmt(bonus), cx, cy + 50, 'score', 26);
-      floater('+5.0s', cx, cy + 86, 'time', 18);
+      floater('+' + addedT.toFixed(1) + 's', cx, cy + 86, 'time', 18);
       flash('#19e3ff', 0.5, 420);
       shake(10, 360);
       fx.confetti(cx, cy, 45);
@@ -572,16 +744,19 @@
     A.init(); A.resume(); A.setMuted(!settings.sound);
     diff = DIFFS[settings.diff];
     hide(titleEl); hide(resultEl); hide(pauseEl);
-    document.body.classList.remove('fever', 'danger');
+    document.body.classList.remove('fever', 'danger', 'charging', 'spurt');
     boardEl.classList.remove('dead');
+    jpEl.classList.remove('on');
+    A.music.duck(false);
     configureGrid();
     buildBoard();
     clearSelUI(); drag = null;
     time = diff.time; cap = Math.round(diff.time * 1.35);
     score = 0; shown = 0; combo = 0; comboT = 0; comboWin = diff.win;
     fever = 0; feverT = 0; wave = 1;
+    spurtT = 0; spurtUsed = false; hitStopT = 0; feverDropPending = false; jp = null; jpHideT = 0; jpSince = 0; lastPts = 0;
     idleT = 0; hintOn = false; refillT = 0; lastSec = 99; dangerOn = false; heat = 0; musicT = 0;
-    stats = { maxCombo: 0, clears: 0, cells: 0, misses: 0, fevers: 0, t: 0 };
+    stats = { maxCombo: 0, clears: 0, cells: 0, misses: 0, fevers: 0, jackpots: 0, t: 0 };
     root.style.setProperty('--heat', 0);
     fx.parts.length = 0;
     fillBoard();
@@ -594,8 +769,10 @@
     if (st !== 'play') return;
     st = 'over';
     cancelDrag(); removeHint();
-    document.body.classList.remove('danger', 'fever');
+    jp = null; jpEl.classList.remove('on'); spurtT = 0; feverT = 0; feverDropPending = false;
+    document.body.classList.remove('danger', 'fever', 'charging', 'spurt');
     boardEl.classList.add('dead');
+    A.music.duck(false);
     A.music.stop();
     A.sfx.gameOver(); vib([80, 40, 160]);
     announce('TIME UP!', { color: '#ff3355', size: 1.2, dur: 1700 });
@@ -623,7 +800,7 @@
     $('#sCombo').textContent = stats.maxCombo;
     $('#sWave').textContent = wave;
     $('#sClears').textContent = stats.clears;
-    $('#sCells').textContent = stats.cells;
+    $('#sJack').textContent = stats.jackpots;
     $('#sFever').textContent = stats.fevers;
     $('#sMiss').textContent = stats.misses;
     show(resultEl);
@@ -634,7 +811,9 @@
     st = 'title';
     A.music.stop();
     hide(resultEl); hide(pauseEl); show(titleEl);
-    document.body.classList.remove('fever', 'danger');
+    jp = null; jpEl.classList.remove('on'); spurtT = 0; feverT = 0; feverDropPending = false;
+    document.body.classList.remove('fever', 'danger', 'charging', 'spurt');
+    A.music.duck(false);
     refreshTitle();
   }
   function pause() {
@@ -663,21 +842,34 @@
 
     stats.t += dt;
     const inFever = feverT > 0;
-    if (inFever) { feverT -= dt; if (feverT <= 0) endFever(); }
-    else time -= dt * drainRate();
+    if (inFever) {
+      feverT -= dt;
+      if (feverDropPending && feverT <= FEVER_DUR) dropFever();
+      if (feverT <= 0) endFever();
+    }
+    if (jp) updateJackpot(dt);
+    if (jpHideT > 0) { jpHideT -= dt; if (jpHideT <= 0) jpEl.classList.remove('on'); }
 
-    if (combo > 0 && !inFever) { comboT -= dt; if (comboT <= 0) breakCombo(); }
+    const frozen = inFever || !!jp;          // clock + combo timer hold still during fever / the jackpot reel
+    if (!frozen) {
+      if (spurtT > 0) {
+        spurtT -= dt;
+        if (spurtT <= 0) { spurtT = 0; gameOver(); return; }
+      } else {
+        time -= dt * drainRate();
+        if (time <= 0) { timeUp(); if (st !== 'play') return; }
+      }
+    }
+    if (combo > 0 && !frozen && spurtT <= 0) { comboT -= dt; if (comboT <= 0) breakCombo(); }
     if (refillT > 0) { refillT -= dt; if (refillT <= 0) doRefill(); }
 
     idleT += dt;
     if (idleT > HINT_DELAY && !hintOn) showHint();
 
-    const danger = time <= 10 && feverT <= 0;
+    const danger = (spurtT > 0 || time <= 10) && feverT <= 0;
     if (danger !== dangerOn) { dangerOn = danger; document.body.classList.toggle('danger', danger); }
-    if (danger) { const s = Math.ceil(time); if (s !== lastSec) { lastSec = s; A.sfx.danger(s); } }
+    if (danger) { const sec = Math.ceil(spurtT > 0 ? spurtT : time); if (sec !== lastSec) { lastSec = sec; A.sfx.danger(sec); } }
     else lastSec = 99;
-
-    if (time <= 0) { time = 0; gameOver(); }
   }
 
   function render(dt) {
@@ -685,31 +877,34 @@
     shown += (score - shown) * Math.min(1, dt * 10);
     if (Math.abs(score - shown) < 1) shown = score;
     setText(scoreEl, fmt(shown));
-    setText(timeEl, Math.max(0, time).toFixed(1));
-    const tf = clamp(time / cap, 0, 1);
+    const spurt = spurtT > 0;
+    setText(timeLbl, spurt ? 'LAST SPURT  ×3' : 'TIME');
+    setText(timeEl, (spurt ? spurtT : Math.max(0, time)).toFixed(1));
+    const tf = spurt ? clamp(spurtT / SPURT_MAX, 0, 1) : clamp(time / cap, 0, 1);
     timeFill.style.transform = `scaleX(${tf})`;
-    const th = Math.round(tf * 120);
+    const th = spurt ? 350 : Math.round(tf * 120);
     if (timeFill._h !== th) { timeFill._h = th; timeFill.style.background = `hsl(${th} 100% 55%)`; }
 
     comboBox.classList.toggle('on', combo > 0);
     setText(comboNumEl, String(combo));
-    setText(comboMultEl, '×' + multOf(combo).toFixed(1) + (feverT > 0 ? ' ×2' : ''));
-    comboFill.style.transform = `scaleX(${combo > 0 ? (feverT > 0 ? 1 : clamp(comboT / comboWin, 0, 1)) : 0})`;
+    setText(comboMultEl, '×' + multOf(combo).toFixed(1) + (bonusMult() > 1 ? ' ×' + bonusMult() : ''));
+    comboFill.style.transform = `scaleX(${combo > 0 ? (feverT > 0 || spurt ? 1 : clamp(comboT / comboWin, 0, 1)) : 0})`;
     setText(waveLbl, 'WAVE ' + wave);
     setText(drainLbl, diff.label + '  DRAIN ×' + drainRate().toFixed(2));
 
     feverBar.classList.toggle('on', feverT > 0);
-    feverFill.style.transform = `scaleX(${feverT > 0 ? feverT / FEVER_DUR : fever / 100})`;
-    setText(feverLbl, feverT > 0 ? 'FEVER!!  SCORE ×2  NO DRAIN' : 'FEVER GAUGE');
+    feverFill.style.transform = `scaleX(${feverT > 0 ? Math.min(1, feverT / FEVER_DUR) : fever / 100})`;
+    setText(feverLbl, feverT > FEVER_DUR ? 'CHARGING…' : feverT > 0 ? 'FEVER!!  SCORE ×2  NO DRAIN' : 'FEVER GAUGE');
 
     // heat drives background glow, border colour, and music brightness
-    const target = feverT > 0 ? 1 : clamp(combo / 24, 0, 1);
+    const burning = (feverT > 0 && feverT <= FEVER_DUR) || spurt;
+    const target = feverT > FEVER_DUR ? 0.6 : burning ? 1 : clamp(combo / 24, 0, 1);
     heat += (target - heat) * Math.min(1, dt * 3);
     if (Math.abs(parseFloat(root.style.getPropertyValue('--heat') || 0) - heat) > 0.01) root.style.setProperty('--heat', heat.toFixed(3));
     musicT += dt;
     if (musicT > 0.2) {
       musicT = 0;
-      A.music.set({ bpm: Math.min(176, 126 + (wave - 1) * 4 + (feverT > 0 ? 12 : 0)), energy: heat, fever: feverT > 0 });
+      A.music.set({ bpm: Math.min(180, 126 + (wave - 1) * 4 + (burning ? 14 : 0)), energy: heat, fever: burning });
     }
   }
 
@@ -717,7 +912,9 @@
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    if (st !== 'paused') { update(dt); fx.update(dt); fx.draw(); render(dt); }
+    let sdt = dt;
+    if (hitStopT > 0) { hitStopT -= dt; sdt = 0; }       // hit-stop: freeze the simulation, keep the UI live
+    if (st !== 'paused') { update(sdt); fx.update(sdt); fx.draw(); render(dt); }
     requestAnimationFrame(frame);
   }
 
@@ -768,7 +965,7 @@
   configureGrid(); buildBoard();
   time = diff.time; cap = Math.round(diff.time * 1.35); score = 0; shown = 0; combo = 0; comboT = 0; comboWin = diff.win;
   fever = 0; feverT = 0; wave = 1; idleT = 0; hintOn = false; refillT = 0; heat = 0; musicT = 0;
-  stats = { maxCombo: 0, clears: 0, cells: 0, misses: 0, fevers: 0, t: 0 };
+  stats = { maxCombo: 0, clears: 0, cells: 0, misses: 0, fevers: 0, jackpots: 0, t: 0 };
   fillBoard();
   render(0);
   requestAnimationFrame(frame);
@@ -777,9 +974,16 @@
   if (location.search.includes('debug')) {
     window.__tr = {
       moves: () => findMoves(vals, R, C),
-      state: () => ({ st, time, score, combo, fever, feverT, wave, R, C, cell, left: countLeft(), stats }),
+      state: () => ({ st, time, score, combo, fever, feverT, wave, R, C, cell, left: countLeft(), stats, spurtT, spurtUsed, jp: !!jp, jpHideT, hitStopT, lastPts, charging: feverT > FEVER_DUR, cls: document.body.className }),
       setTime: (t) => { time = t; },
       endFever: () => { if (feverT > 0) endFever(); },
+      forceJackpot: (id) => { if (st === 'play' && !jp) startJackpot(id); },
+      forceFever: () => { if (st === 'play') startFever({ x: innerWidth / 2, y: innerHeight * 0.45 }); },
+      punch: (a, d) => punch(a, d),
+      hitStop: (sec) => hitStop(sec),
+      announce: (t, o) => announce(t, o),
+      cellAt: (x, y) => cellAt(x, y),
+      cellRect: (i) => { const r = cellEls[i].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; },
       geometry: () => { const o = boardOrigin(); return { ox: o.x, oy: o.y, cell, gap: GAP }; },
       vals: () => Array.from(vals),
     };

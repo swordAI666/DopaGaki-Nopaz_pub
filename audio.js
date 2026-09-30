@@ -106,6 +106,45 @@ window.GameAudio = (() => {
         tone({ f: 330 * Math.pow(2, s / 12), t: 0.72 + k * 0.03, dur: 0.6, type: 'square', vol: 0.09, lp: 4500 }));
       tone({ f: 110, f2: 40, t: 0.72, dur: 0.4, type: 'sine', vol: 0.6 });
     },
+    // build-up: rising noise + sweep + accelerating ticks; music is ducked meanwhile
+    feverCharge(d = 0.9) {
+      tone({ f: 120, f2: 1500, dur: d, type: 'sawtooth', vol: 0.12, lp: 5000, a: 0.05 });
+      noise({ dur: d, vol: 0.24, type: 'bandpass', freq: 400, f2: 9000, q: 1.5 });
+      let t = 0, gap = 0.17;
+      while (t < d - 0.05) {
+        tone({ f: 900 + t * 1500, t, dur: 0.04, type: 'square', vol: 0.07 });
+        t += gap; gap = Math.max(0.04, gap * 0.78);
+      }
+    },
+    // the drop: sub boom + crash + chord stab
+    feverDrop() {
+      tone({ f: 95, f2: 34, dur: 0.75, type: 'sine', vol: 0.95, a: 0.002 });
+      tone({ f: 200, f2: 50, dur: 0.22, type: 'sine', vol: 0.7, a: 0.001 });
+      noise({ dur: 0.75, vol: 0.42, type: 'highpass', freq: 3000 });
+      [0, 4, 7, 12, 16].forEach((s) =>
+        tone({ f: 330 * Math.pow(2, s / 12), dur: 0.7, type: 'sawtooth', vol: 0.09, lp: 5200 }));
+    },
+    spurtStart() {
+      for (let k = 0; k < 3; k++) {
+        tone({ f: 500, f2: 1100, t: k * 0.16, dur: 0.15, type: 'sawtooth', vol: 0.16, lp: 4500 });
+      }
+      tone({ f: 80, f2: 32, dur: 0.6, type: 'sine', vol: 0.9 });
+      noise({ dur: 0.6, vol: 0.35, type: 'highpass', freq: 2500 });
+    },
+    jackpotStart() {
+      [0, 4, 7, 12].forEach((s, k) =>
+        tone({ f: 523.25 * Math.pow(2, s / 12), t: k * 0.05, dur: 0.12, type: 'square', vol: 0.1, lp: 5000 }));
+    },
+    jackpotTick(k) {
+      tone({ f: 620 + (k % 5) * 110, dur: 0.045, type: 'square', vol: 0.09 });
+    },
+    jackpotWin() {
+      for (let k = 0; k < 11; k++) {
+        tone({ f: 784 * Math.pow(2, (k * 2) / 12), t: k * 0.045, dur: 0.14, type: k % 2 ? 'triangle' : 'square', vol: 0.1, lp: 6000 });
+      }
+      tone({ f: 120, f2: 40, dur: 0.4, type: 'sine', vol: 0.8 });
+      noise({ dur: 0.9, vol: 0.22, type: 'highpass', freq: 6000, t: 0.1 });
+    },
     feverEnd() {
       tone({ f: 900, f2: 120, dur: 0.5, type: 'triangle', vol: 0.15 });
     },
@@ -172,6 +211,13 @@ window.GameAudio = (() => {
       mus.timer = setInterval(sched, 25);
     },
     stop() { mus.on = false; clearInterval(mus.timer); },
+    // pull the BGM down during a build-up (on) and snap it back for the drop (off)
+    duck(on) {
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      bgmBus.gain.cancelScheduledValues(now);
+      bgmBus.gain.setTargetAtTime(on ? 0.08 : 0.5, now, on ? 0.12 : 0.004);
+    },
     set(o) {
       if (o.bpm) mus.bpm = o.bpm;
       if (o.energy != null) {
